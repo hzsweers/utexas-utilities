@@ -50,18 +50,15 @@ import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
 import com.nasageek.utexasutilities.AsyncTask;
 import com.nasageek.utexasutilities.BuildingSaxHandler;
-import com.nasageek.utexasutilities.ConnectionHelper;
 import com.nasageek.utexasutilities.NavigationDataSet;
 import com.nasageek.utexasutilities.NavigationSaxHandler;
 import com.nasageek.utexasutilities.R;
-import com.nasageek.utexasutilities.Utility;
 import com.nasageek.utexasutilities.model.BuildingPlacemark;
 import com.nasageek.utexasutilities.model.RoutePlacemark;
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
 
-import org.apache.http.HttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.util.EntityUtils;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 import org.xml.sax.XMLReader;
@@ -104,6 +101,7 @@ public class CampusMapActivity extends SherlockFragmentActivity {
     private HashMap<String, Polyline> polylineMap;
     private GoogleMap mMap;
 
+    private static final int CURRENT_ROUTES_VERSION = 1;
     private static final int BURNT_ORANGE = Color.parseColor("#DDCC5500");
     private static final LatLng UT_TOWER_LOC = new LatLng(30.285706, -97.739423);
     private static final int GPS_SETTINGS_REQ_CODE = 0;
@@ -113,7 +111,6 @@ public class CampusMapActivity extends SherlockFragmentActivity {
     public enum Route {
         No_Overlay(0, "No Bus Route Overlay"),
         Crossing_Place(670, "Crossing Place"),
-        Camino_La_Costa(651, "Camino La Costa"),
         East_Campus(641, "East Campus"),
         Forty_Acres(640, "Forty Acres"),
         Far_West(661, "Far West"),
@@ -123,7 +120,6 @@ public class CampusMapActivity extends SherlockFragmentActivity {
         Lakeshore(672, "Lakeshore"),
         North_Riverside(671, "North Riverside"),
         North_Riverside_Lakeshore(680, "North Riverside/Lakeshore"),
-        Pickle_Research_Campus(652, "Pickle Research Campus"),
         Red_River(653, "Red River"),
         West_Campus(642, "West Campus");
         //@formatter:on
@@ -257,14 +253,23 @@ public class CampusMapActivity extends SherlockFragmentActivity {
         spinner.setAdapter(adapter);
 
         int default_route = Integer.parseInt(settings.getString("default_bus_route", NO_ROUTE_ID));
-        // TODO: Handle all route changes, not just changes that cause obvious errors
-        if (default_route >= adapter.getCount()) {
-            Utility.commit(settings.edit().putString("default_bus_route", NO_ROUTE_ID));
-            Toast.makeText(
-                    this,
-                    "Your default bus route has been reset due to either an application error or a change in UT's shuttle system.",
-                    Toast.LENGTH_LONG).show();
+        // use a simple versioning scheme to ensure that I can trigger a wipe
+        // of the default route on an update
+        int routesVersion = settings.getInt("routes_version", 0);
+        if (routesVersion < CURRENT_ROUTES_VERSION) {
+            settings.edit().putString("default_bus_route", NO_ROUTE_ID).apply();
+            settings.edit().putInt("routes_version", CURRENT_ROUTES_VERSION).apply();
+            // only bother the user if they've set a default route
+            if (default_route != 0) {
+                Toast.makeText(
+                        this,
+                        "Your default bus route has been reset due to" +
+                                " a change in UT's shuttle system.",
+                        Toast.LENGTH_LONG).show();
+            }
+            default_route = 0;
         }
+
         routeid = ((Route) spinner.getAdapter().getItem(default_route)).getCode();
         actionbar.setSelectedNavigationItem(default_route);
     }
@@ -338,7 +343,7 @@ public class CampusMapActivity extends SherlockFragmentActivity {
                 }
             }
         }
-        if (buildingIdList.size() > 1) {
+        if (foundCount > 1) {
             mSetCameraToBounds = true;
         }
         if (foundCount != buildingIdList.size()) {
@@ -762,14 +767,19 @@ public class CampusMapActivity extends SherlockFragmentActivity {
                 int i = (Integer) params[0];
                 stopMarker = (Marker) params[1];
                 String times;
-                DefaultHttpClient httpclient = ConnectionHelper.getThreadSafeClient();
+                OkHttpClient httpclient = new OkHttpClient();
                 String data;
-                HttpResponse response;
-                String request = "http://www.capmetro.org/planner/s_service.asp?tool=NB&stopid=" + i;
+                String requestUrl = "http://www.capmetro.org/planner/s_service.asp?tool=NB&stopid=" + i;
 
                 try {
-                    response = httpclient.execute(new HttpGet(request));
-                    data = EntityUtils.toString(response.getEntity());
+                    Request get = new Request.Builder()
+                            .url(requestUrl)
+                            .build();
+                    Response response = httpclient.newCall(get).execute();
+                    if(!response.isSuccessful()) {
+                        throw new IOException("Bad response code " + response);
+                    }
+                    data = response.body().string();
                 } catch (Exception e) {
                     times = ERROR_COULD_NOT_REACH_CAPMETRO;
                     e.printStackTrace();

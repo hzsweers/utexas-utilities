@@ -1,6 +1,20 @@
 
 package com.nasageek.utexasutilities.fragments;
 
+import com.actionbarsherlock.app.SherlockFragment;
+import com.foound.widget.AmazingListView;
+import com.mapsaurus.paneslayout.FragmentLauncher;
+import com.mapsaurus.paneslayout.PanesActivity;
+import com.nasageek.utexasutilities.AsyncTask;
+import com.nasageek.utexasutilities.MyPair;
+import com.nasageek.utexasutilities.R;
+import com.nasageek.utexasutilities.Utility;
+import com.nasageek.utexasutilities.adapters.BBClassAdapter;
+import com.nasageek.utexasutilities.model.BBClass;
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
+
 import android.annotation.TargetApi;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,23 +28,7 @@ import android.widget.AdapterView.OnItemClickListener;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.actionbarsherlock.app.SherlockFragment;
-import com.foound.widget.AmazingListView;
-import com.mapsaurus.paneslayout.FragmentLauncher;
-import com.mapsaurus.paneslayout.PanesActivity;
-import com.nasageek.utexasutilities.AsyncTask;
-import com.nasageek.utexasutilities.ConnectionHelper;
-import com.nasageek.utexasutilities.MyPair;
-import com.nasageek.utexasutilities.R;
-import com.nasageek.utexasutilities.adapters.BBClassAdapter;
-import com.nasageek.utexasutilities.model.BBClass;
-
-import org.apache.http.HttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.impl.cookie.BasicClientCookie;
-import org.apache.http.util.EntityUtils;
-
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -40,7 +38,7 @@ import java.util.regex.Pattern;
 
 public class BlackboardCourseListFragment extends SherlockFragment {
 
-    private DefaultHttpClient httpclient;
+    private OkHttpClient httpclient;
     private LinearLayout bb_pb_ll;
     private TextView bbetv;
     private LinearLayout bbell;
@@ -76,13 +74,7 @@ public class BlackboardCourseListFragment extends SherlockFragment {
                     .getSerializable("classSectionList");
         }
 
-        httpclient = ConnectionHelper.getThreadSafeClient();
-        httpclient.getCookieStore().clear();
-        BasicClientCookie cookie = new BasicClientCookie("s_session_id",
-                ConnectionHelper.getBBAuthCookie(getActivity(), httpclient));
-        cookie.setDomain(ConnectionHelper.blackboard_domain_noprot);
-        httpclient.getCookieStore().addCookie(cookie);
-
+        httpclient = new OkHttpClient();
         classAdapter = new BBClassAdapter(getActivity(), classSectionList);
     }
 
@@ -151,12 +143,7 @@ public class BlackboardCourseListFragment extends SherlockFragment {
         // remember writing this...
         if (classSectionList.size() == 0) {
             fetch = new fetchClassesTask(httpclient);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
-                fetch.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-            } else {
-                fetch.execute();
-            }
+            Utility.parallelExecute(fetch);
         }
         return vg;
     }
@@ -169,10 +156,10 @@ public class BlackboardCourseListFragment extends SherlockFragment {
 
     private class fetchClassesTask extends
             AsyncTask<Object, Void, ArrayList<MyPair<String, List<BBClass>>>> {
-        private DefaultHttpClient client;
+        private OkHttpClient client;
         private String errorMsg;
 
-        public fetchClassesTask(DefaultHttpClient client) {
+        public fetchClassesTask(OkHttpClient client) {
             this.client = client;
         }
 
@@ -185,14 +172,17 @@ public class BlackboardCourseListFragment extends SherlockFragment {
 
         @Override
         protected ArrayList<MyPair<String, List<BBClass>>> doInBackground(Object... params) {
-            HttpGet hget = new HttpGet(ConnectionHelper.blackboard_domain
-                    + "/webapps/Bb-mobile-BBLEARN/enrollments?course_type=COURSE");
+            String reqUrl = BlackboardFragment.BLACKBOARD_DOMAIN
+                    + "/webapps/Bb-mobile-BBLEARN/enrollments?course_type=COURSE";
+            Request request = new Request.Builder()
+                    .url(reqUrl)
+                    .build();
             String pagedata = "";
 
             try {
-                HttpResponse response = client.execute(hget);
-                pagedata = EntityUtils.toString(response.getEntity());
-            } catch (Exception e) {
+                Response response = client.newCall(request).execute();
+                pagedata = response.body().string();
+            } catch (IOException e) {
                 errorMsg = "UTilities could not fetch the Blackboard course list";
                 e.printStackTrace();
                 cancel(true);
@@ -207,52 +197,39 @@ public class BlackboardCourseListFragment extends SherlockFragment {
                 classList.add(new BBClass(class_matcher.group(2).replace("&amp;", "&"),
                         class_matcher.group(1).replace("&amp;", "&"), class_matcher.group(3)));
             }
-            // build the sectioned list now
-            String currentCategory = "";
-            ArrayList<BBClass> sectionList = null;
-            ArrayList<MyPair<String, List<BBClass>>> tempClassSectionList = new ArrayList<MyPair<String, List<BBClass>>>();
+            // section the class list by semester
+            String currentSemester = "";
+            ArrayList<BBClass> currentSemesterList = null;
+            ArrayList<MyPair<String, List<BBClass>>> sectionedClassList =
+                    new ArrayList<MyPair<String, List<BBClass>>>();
             for (int i = 0; i < classList.size(); i++) {
-                // first course is always in a new category (the first category)
+                // first course always starts a new semester
                 if (i == 0) {
-                    currentCategory = classList.get(i).getSemester();
-                    sectionList = new ArrayList<BBClass>();
-                    sectionList.add(classList.get(i));
+                    currentSemester = classList.get(i).getSemester();
+                    currentSemesterList = new ArrayList<BBClass>();
+                    currentSemesterList.add(classList.get(i));
                 }
-                // if the current course is not part of the current category or
-                // we're on the last course
-                // weird stuff going on here depending on if we're at the end of
-                // the course list
-                else if (!classList.get(i).getSemester().equals(currentCategory)
-                        || i == classList.size() - 1) {
+                // hit a new semester, finalize current semester and init the new one
+                else if (!classList.get(i).getSemester().equals(currentSemester)) {
+                    sectionedClassList.add(new MyPair<String, List<BBClass>>(currentSemester,
+                            currentSemesterList));
 
-                    if (i == classList.size() - 1) {
-                        sectionList.add(classList.get(i));
-                    }
-
-                    tempClassSectionList.add(new MyPair<String, List<BBClass>>(currentCategory,
-                            sectionList));
-
-                    currentCategory = classList.get(i).getSemester();
-                    sectionList = new ArrayList<BBClass>();
-
-                    if (i != classList.size() - 1) {
-                        sectionList.add(classList.get(i));
-                    }
+                    currentSemester = classList.get(i).getSemester();
+                    currentSemesterList = new ArrayList<BBClass>();
+                    currentSemesterList.add(classList.get(i));
                 }
-                // otherwise just add to the current category
+                // otherwise just add to the current semester
                 else {
-                    sectionList.add(classList.get(i));
+                    currentSemesterList.add(classList.get(i));
+                }
+                // add final semester once we're through
+                if (i == classList.size() - 1) {
+                    sectionedClassList.add(new MyPair<String, List<BBClass>>(currentSemester,
+                            currentSemesterList));
                 }
             }
-            Collections.reverse(tempClassSectionList);
-            /*
-             * Collections.sort(tempClassSectionList, new
-             * Comparator<ParcelableMyPair<String, List<BBClass>>>() {
-             * @Override public int compare(ParcelableMyPair<String,
-             * List<BBClass>> lhs, ParcelableMyPair<String, List<BBClass>> rhs)
-             * { return -lhs.first.compareTo(rhs.first); } });
-             */
-            return tempClassSectionList;
+            Collections.reverse(sectionedClassList);
+            return sectionedClassList;
         }
 
         @Override

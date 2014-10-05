@@ -1,6 +1,17 @@
 
 package com.nasageek.utexasutilities.fragments;
 
+import com.actionbarsherlock.app.ActionBar;
+import com.actionbarsherlock.view.Menu;
+import com.actionbarsherlock.view.MenuInflater;
+import com.actionbarsherlock.view.MenuItem;
+import com.mapsaurus.paneslayout.FragmentLauncher;
+import com.nasageek.utexasutilities.AsyncTask;
+import com.nasageek.utexasutilities.R;
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
+
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -18,21 +29,7 @@ import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
 
-import com.actionbarsherlock.app.ActionBar;
-import com.actionbarsherlock.view.Menu;
-import com.actionbarsherlock.view.MenuInflater;
-import com.actionbarsherlock.view.MenuItem;
-import com.mapsaurus.paneslayout.FragmentLauncher;
-import com.nasageek.utexasutilities.AsyncTask;
-import com.nasageek.utexasutilities.ConnectionHelper;
-import com.nasageek.utexasutilities.R;
-
-import org.apache.http.HttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.impl.cookie.BasicClientCookie;
-import org.apache.http.util.EntityUtils;
-
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -44,19 +41,20 @@ public class BlackboardAnnouncementsFragment extends BlackboardFragment {
     private TextView atv;
     private TextView etv;
     private LinearLayout ell;
-    private DefaultHttpClient httpclient;
+    private OkHttpClient httpclient;
     private fetchAnnouncementsTask fetch;
     private AnnouncementsAdapter announceAdapter;
     private ArrayList<bbAnnouncement> announcements;
     private boolean noAnnouncements = false;
     private String courseID, courseName, viewUri;
+    private String selection;
     private boolean fromDashboard;
 
     public BlackboardAnnouncementsFragment() {
     }
 
     public static BlackboardAnnouncementsFragment newInstance(String courseID, String courseName,
-            String viewUri, Boolean fromDashboard) {
+            String viewUri, Boolean fromDashboard, String selection) {
         BlackboardAnnouncementsFragment baf = new BlackboardAnnouncementsFragment();
 
         Bundle args = new Bundle();
@@ -64,6 +62,7 @@ public class BlackboardAnnouncementsFragment extends BlackboardFragment {
         args.putString("courseName", courseName);
         args.putString("viewUri", viewUri);
         args.putBoolean("fromDashboard", fromDashboard);
+        args.putString("selection", selection);
         baf.setArguments(args);
 
         return baf;
@@ -77,17 +76,11 @@ public class BlackboardAnnouncementsFragment extends BlackboardFragment {
         courseName = getArguments().getString("courseName");
         viewUri = getArguments().getString("viewUri");
         fromDashboard = getArguments().getBoolean("fromDashboard");
+        selection = getArguments().getString("selection");
         setHasOptionsMenu(true);
         announcements = new ArrayList<bbAnnouncement>();
         announceAdapter = new AnnouncementsAdapter(getActivity(), announcements);
-
-        httpclient = ConnectionHelper.getThreadSafeClient();
-        httpclient.getCookieStore().clear();
-        BasicClientCookie cookie = new BasicClientCookie("s_session_id",
-                ConnectionHelper.getBBAuthCookie(getActivity(), httpclient));
-        cookie.setDomain(ConnectionHelper.blackboard_domain_noprot);
-        httpclient.getCookieStore().addCookie(cookie);
-
+        httpclient = new OkHttpClient();
     }
 
     @Override
@@ -206,10 +199,11 @@ public class BlackboardAnnouncementsFragment extends BlackboardFragment {
     }
 
     private class fetchAnnouncementsTask extends AsyncTask<Object, Void, ArrayList<bbAnnouncement>> {
-        private DefaultHttpClient client;
+        private OkHttpClient client;
         private String errorMsg;
+        private int selectIndex = 0;
 
-        public fetchAnnouncementsTask(DefaultHttpClient client) {
+        public fetchAnnouncementsTask(OkHttpClient client) {
             this.client = client;
         }
 
@@ -223,21 +217,24 @@ public class BlackboardAnnouncementsFragment extends BlackboardFragment {
 
         @Override
         protected ArrayList<bbAnnouncement> doInBackground(Object... params) {
-            HttpGet hget = new HttpGet(
-                    ConnectionHelper.blackboard_domain
-                            + "/webapps/Bb-mobile-BBLEARN/courseData?course_section=ANNOUNCEMENTS&course_id="
-                            + getArguments().getString("courseID"));
+            String reqUrl = BLACKBOARD_DOMAIN
+                    + "/webapps/Bb-mobile-BBLEARN/courseData?course_section=ANNOUNCEMENTS&course_id="
+                    + getArguments().getString("courseID");
+            Request request = new Request.Builder()
+                    .url(reqUrl)
+                    .build();
             String pagedata = "";
 
             try {
-                HttpResponse response = client.execute(hget);
-                pagedata = EntityUtils.toString(response.getEntity());
-            } catch (Exception e) {
+                Response response = client.newCall(request).execute();
+                pagedata = response.body().string();
+            } catch (IOException e) {
                 errorMsg = "UTilities could not fetch this course's announcements";
                 e.printStackTrace();
                 cancel(true);
                 return null;
             }
+
             ArrayList<bbAnnouncement> data = new ArrayList<bbAnnouncement>();
             // pagedata = pagedata.replaceAll("comments=\".*?\"", ""); //might
             // include later, need to strip for now for grade recognition
@@ -251,6 +248,14 @@ public class BlackboardAnnouncementsFragment extends BlackboardFragment {
             while (announcementMatcher.find()) {
                 data.add(new bbAnnouncement(announcementMatcher.group(1), announcementMatcher
                         .group(2), announcementMatcher.group(3)));
+            }
+
+            if (!selection.equals("")) {
+                for (int i = 0; i < data.size(); i++) {
+                    if (data.get(i).getSubject().equals(selection)) {
+                        selectIndex = i;
+                    }
+                }
             }
             return data;
         }
@@ -267,6 +272,7 @@ public class BlackboardAnnouncementsFragment extends BlackboardFragment {
                     noAnnouncements = true;
                 }
                 announceAdapter.notifyDataSetChanged();
+                alv.setSelection(selectIndex);
                 // alv.setVisibility(View.VISIBLE);
                 // atv.setVisibility(View.GONE);
                 /*

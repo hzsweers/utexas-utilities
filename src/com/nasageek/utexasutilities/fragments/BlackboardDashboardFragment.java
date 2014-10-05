@@ -1,6 +1,24 @@
 
 package com.nasageek.utexasutilities.fragments;
 
+import com.actionbarsherlock.app.SherlockFragment;
+import com.foound.widget.AmazingAdapter;
+import com.foound.widget.AmazingListView;
+import com.mapsaurus.paneslayout.FragmentLauncher;
+import com.nasageek.utexasutilities.AsyncTask;
+import com.nasageek.utexasutilities.BlackboardDashboardXmlParser;
+import com.nasageek.utexasutilities.MyPair;
+import com.nasageek.utexasutilities.R;
+import com.nasageek.utexasutilities.Utility;
+import com.nasageek.utexasutilities.model.BBClass;
+import com.nasageek.utexasutilities.model.FeedItem;
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
+
+import org.acra.ACRA;
+import org.xmlpull.v1.XmlPullParserException;
+
 import android.annotation.TargetApi;
 import android.content.SharedPreferences;
 import android.content.res.TypedArray;
@@ -8,7 +26,7 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
-import android.support.v4.app.FragmentActivity;
+import android.support.v4.app.Fragment;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -21,47 +39,25 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.actionbarsherlock.app.SherlockFragment;
-import com.foound.widget.AmazingAdapter;
-import com.foound.widget.AmazingListView;
-import com.mapsaurus.paneslayout.FragmentLauncher;
-import com.nasageek.utexasutilities.AsyncTask;
-import com.nasageek.utexasutilities.BlackboardDashboardXmlParser;
-import com.nasageek.utexasutilities.ConnectionHelper;
-import com.nasageek.utexasutilities.MyPair;
-import com.nasageek.utexasutilities.R;
-import com.nasageek.utexasutilities.model.BBClass;
-import com.nasageek.utexasutilities.model.FeedItem;
-
-import org.acra.ACRA;
-import org.apache.http.HttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.impl.cookie.BasicClientCookie;
-import org.apache.http.util.EntityUtils;
-import org.xmlpull.v1.XmlPullParserException;
-
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.Serializable;
 import java.io.StringReader;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
-import javax.net.ssl.HttpsURLConnection;
-
+/**
+ * Fragment for displaying the user's Blackboard notification dashboard, a list of
+ * all course updates arranged in reverse chronological order.
+ */
 public class BlackboardDashboardFragment extends SherlockFragment {
 
-    private DefaultHttpClient httpclient;
     private LinearLayout d_pb_ll;
     private AmazingListView dlv;
     private TextView etv;
     private LinearLayout ell;
     private Button eb;
-    // private TimingLogger tl;
-    private fetchDashboardTask fetch;
+    private FetchDashboardTask fetch;
     private boolean longform;
 
     private HashMap<String, BBClass> courses;
@@ -81,15 +77,15 @@ public class BlackboardDashboardFragment extends SherlockFragment {
         return f;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // tl = new TimingLogger("Dashboard", "loadTime");
 
         longform = PreferenceManager.getDefaultSharedPreferences(getActivity()).getBoolean(
                 "blackboard_class_longform", false);
         if (savedInstanceState == null) {
-            feedList = new ArrayList<MyPair<String, List<FeedItem>>>();
+            feedList = new ArrayList<>();
         } else {
             feedList = (List<MyPair<String, List<FeedItem>>>) savedInstanceState
                     .getSerializable("feedList");
@@ -103,13 +99,6 @@ public class BlackboardDashboardFragment extends SherlockFragment {
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         View vg = inflater.inflate(R.layout.blackboard_dashboard_fragment, container, false);
 
-        httpclient = ConnectionHelper.getThreadSafeClient();
-        String bbAuthCookie = ConnectionHelper.getBBAuthCookie(getActivity(), httpclient);
-        httpclient.getCookieStore().clear();
-        BasicClientCookie cookie = new BasicClientCookie("s_session_id", bbAuthCookie);
-        cookie.setDomain(ConnectionHelper.blackboard_domain_noprot);
-        httpclient.getCookieStore().addCookie(cookie);
-
         dlv = (AmazingListView) vg.findViewById(R.id.dash_listview);
         d_pb_ll = (LinearLayout) vg.findViewById(R.id.dash_progressbar_ll);
         ell = (LinearLayout) vg.findViewById(R.id.dash_error);
@@ -122,93 +111,45 @@ public class BlackboardDashboardFragment extends SherlockFragment {
 
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-
-                FragmentActivity act = getActivity();
                 FeedItem fi = (FeedItem) parent.getAdapter().getItem(position);
                 String courseid = fi.getBbId();
                 String contentid = fi.getContentId();
                 String coursename = courses.get(fi.getBbId()).getCourseId();
                 String message = fi.getMessage();
 
-                if ("Grades".equals(fi.getType())) {
-                    /*
-                     * final Intent gradesLaunch = new Intent(null, null,
-                     * getActivity(), BlackboardGradesActivity.class); //
-                     * gradesLaunch.putExtra("viewUri", url); //TODO: fetch
-                     * coursemap for viewurl gradesLaunch.putExtra("courseid",
-                     * courseid); gradesLaunch.putExtra("coursename",
-                     * coursename); gradesLaunch.putExtra("showViewInWeb",
-                     * false); startActivity(gradesLaunch);
-                     */
-
-                    // TODO: reconsider passing blank string as viewUri
-
-                    ((FragmentLauncher) act).addFragment(
-                            BlackboardDashboardFragment.this.getParentFragment(),
-                            BlackboardGradesFragment.newInstance(courseid, coursename, "", true));
-                } else if ("Content".equals(fi.getType())) {
-                    /*
-                     * final Intent bbItemLaunch = new Intent(null, null,
-                     * getActivity(), BlackboardDownloadableItemActivity.class);
-                     * bbItemLaunch.putExtra("contentid", contentid);
-                     * bbItemLaunch.putExtra("itemName", message); //TODO: not
-                     * sure if I want to keep this //
-                     * bbItemLaunch.putExtra("viewUri", url); TODO
-                     * bbItemLaunch.putExtra("courseid", courseid);
-                     * bbItemLaunch.putExtra("coursename", coursename);
-                     * bbItemLaunch.putExtra("showViewInWeb", false);
-                     * startActivity(bbItemLaunch);
-                     */
-
-                    ((FragmentLauncher) act).addFragment(BlackboardDashboardFragment.this
-                            .getParentFragment(), BlackboardDownloadableItemFragment.newInstance(
-                            contentid, courseid, coursename, message, "", true));
-                } else if ("Announcement".equals(fi.getType())) {
-                    // TODO: figure out how to seek to a specific announcement
-                    /*
-                     * final Intent announcementsLaunch = new Intent(null, null,
-                     * getActivity(), BlackboardAnnouncementsActivity.class); //
-                     * announcementsLaunch.putExtra("viewUri", url); TODO
-                     * announcementsLaunch.putExtra("courseid", courseid);
-                     * announcementsLaunch.putExtra("coursename", coursename);
-                     * announcementsLaunch.putExtra("showViewInWeb", false);
-                     * startActivity(announcementsLaunch);
-                     */
-
-                    ((FragmentLauncher) act).addFragment(BlackboardDashboardFragment.this
-                            .getParentFragment(), BlackboardAnnouncementsFragment.newInstance(
-                            courseid, coursename, "", true));
-                } else if ("Courses".equals(fi.getType())) {
-                    /*
-                     * final Intent classLaunch = new
-                     * Intent(getString(R.string.coursemap_intent), null,
-                     * getActivity(), CourseMapActivity.class);
-                     * classLaunch.putExtra("courseid", fi.getBbId());
-                     * classLaunch.setData(Uri.parse(fi.getBbId()));
-                     * classLaunch.putExtra("folderName", "Course Map");
-                     * classLaunch.putExtra("coursename", fi.getCourseId()); //
-                     * classLaunch.putExtra("showViewInWeb", false);
-                     * startActivity(classLaunch);
-                     */
-
-                    ((FragmentLauncher) act).addFragment(BlackboardDashboardFragment.this
-                            .getParentFragment(), BlackboardCourseMapFragment.newInstance(
-                            getString(R.string.coursemap_intent), null, courseid, coursename,
-                            "Course Map", "", -1, false));
+                FragmentLauncher launcher = (FragmentLauncher) getActivity();
+                Fragment currentFragment = BlackboardDashboardFragment.this.getParentFragment();
+                switch (fi.getType()) {
+                    case "Grades":
+                        launcher.addFragment(currentFragment,
+                                BlackboardGradesFragment.newInstance(courseid, coursename, "", true,
+                                        fi.getMessage()));
+                        break;
+                    case "Content":
+                        launcher.addFragment(currentFragment,
+                                BlackboardDownloadableItemFragment.newInstance(contentid, courseid,
+                                        coursename, message, "", true));
+                        break;
+                    case "Announcement":
+                        launcher.addFragment(currentFragment,
+                                BlackboardAnnouncementsFragment.newInstance(courseid, coursename,
+                                        "", true, fi.getMessage()));
+                        break;
+                    case "Courses":
+                        launcher.addFragment(currentFragment,
+                                BlackboardCourseMapFragment.newInstance(
+                                        getString(R.string.coursemap_intent), null, courseid,
+                                        coursename, "Course Map", "", -1, false));
+                        break;
                 }
             }
         });
 
         if (feedList.size() == 0) {
-            fetch = new fetchDashboardTask(httpclient);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
-                fetch.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, bbAuthCookie);
-            } else {
-                fetch.execute(bbAuthCookie);
-            }
+            OkHttpClient httpclient = new OkHttpClient();
+            fetch = new FetchDashboardTask(httpclient);
+            Utility.parallelExecute(fetch);
         }
-
         return vg;
     }
 
@@ -227,31 +168,16 @@ public class BlackboardDashboardFragment extends SherlockFragment {
         outState.putSerializable("courses", courses);
     }
 
-    public void refresh() {
-        // tlv.setVisibility(View.GONE);
-        // etv.setVisibility(View.GONE);
-        // t_pb_ll.setVisibility(View.VISIBLE);
-        if (fetch != null) {
-            fetch.cancel(true);
-            fetch = null;
-        }
-        // transactionlist.clear();
-
-        // parser(true);
-        // ta.resetPage();
-        // tlv.setSelectionFromTop(0, 0);
-    }
-
-    private class fetchDashboardTask extends
+    private class FetchDashboardTask extends
             AsyncTask<String, Void, List<MyPair<String, List<FeedItem>>>> {
-        private DefaultHttpClient client;
+        private OkHttpClient client;
         private String errorMsg = "";
         private List<MyPair<String, List<FeedItem>>> tempFeedList;
         private Exception ex;
         private String pagedata;
         private Boolean showButton = false;
 
-        public fetchDashboardTask(DefaultHttpClient client) {
+        public FetchDashboardTask(OkHttpClient client) {
             this.client = client;
         }
 
@@ -264,85 +190,47 @@ public class BlackboardDashboardFragment extends SherlockFragment {
 
         @Override
         protected List<MyPair<String, List<FeedItem>>> doInBackground(String... params) {
-            String pagedata = "";
-            String bbAuthCookie = params[0];
-            tempFeedList = new ArrayList<MyPair<String, List<FeedItem>>>();
+            tempFeedList = new ArrayList<>();
 
-            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.FROYO) {
-                URL location;
-                HttpsURLConnection conn = null;
-                try {
-                    location = new URL(
-                            ConnectionHelper.blackboard_domain
-                                    + "/webapps/Bb-mobile-BBLEARN/dashboard?course_type=COURSE&with_notifications=true");
-                    conn = (HttpsURLConnection) location.openConnection();
-                    conn.setRequestProperty("Cookie", "s_session_id=" + bbAuthCookie);
-                    conn.setRequestMethod("GET");
-                    conn.setDoInput(true);
-                    conn.connect();
-                    InputStream in = conn.getInputStream();
-                    BlackboardDashboardXmlParser parser = new BlackboardDashboardXmlParser();
-                    tempFeedList = parser.parse(in);
-                    courses = parser.getCourses();
-                    in.close();
-                    // tl.addSplit("XML downloaded");
+            String reqUrl = BlackboardFragment.BLACKBOARD_DOMAIN
+                    + "/webapps/Bb-mobile-BBLEARN/dashboard?course_type=COURSE&" +
+                    "with_notifications=true";
+            Request request = new Request.Builder()
+                    .url(reqUrl)
+                    .build();
 
-                } catch (IOException e) {
-                    errorMsg = "UTilities could not fetch your Blackboard Dashboard";
-                    e.printStackTrace();
-                    cancel(true);
-                    return null;
-                } catch (XmlPullParserException e) {
-                    errorMsg = "UTilities could not parse the downloaded Dashboard data.";
-                    showButton = true;
-                    this.pagedata = pagedata;
-                    ex = e;
-                    e.printStackTrace();
-                    cancel(true);
-                    return null;
-
-                } finally {
-                    if (conn != null) {
-                        conn.disconnect();
-                    }
-                }
-            } else {
-                try {
-                    HttpGet hget = new HttpGet(
-                            ConnectionHelper.blackboard_domain
-                                    + "/webapps/Bb-mobile-BBLEARN/dashboard?course_type=COURSE&with_notifications=true");
-                    HttpResponse response = client.execute(hget);
-                    pagedata = EntityUtils.toString(response.getEntity());
-                    BlackboardDashboardXmlParser parser = new BlackboardDashboardXmlParser();
-                    tempFeedList = parser.parse(new StringReader(pagedata));
-                    courses = parser.getCourses();
-
-                } catch (IOException e) {
-                    errorMsg = "UTilities could not fetch your Blackboard Dashboard";
-                    e.printStackTrace();
-                    cancel(true);
-                    return null;
-                } catch (XmlPullParserException e) {
-                    errorMsg = "UTilities could not parse the downloaded Dashboard data.";
-                    showButton = true;
-                    this.pagedata = pagedata;
-                    ex = e;
-                    e.printStackTrace();
-                    cancel(true);
-                    return null;
-                }
+            try {
+                Response response = client.newCall(request).execute();
+                pagedata = response.body().string();
+            } catch (IOException e) {
+                errorMsg = "UTilities could not fetch your Blackboard Dashboard";
+                e.printStackTrace();
+                cancel(true);
+                return null;
             }
-            // tl.addSplit("XML parsed");
-            // tl.dumpToLog();
+
+            try {
+                BlackboardDashboardXmlParser parser = new BlackboardDashboardXmlParser();
+                tempFeedList = parser.parse(new StringReader(pagedata));
+                courses = parser.getCourses();
+            } catch (IOException|XmlPullParserException e) {
+                errorMsg = "UTilities could not parse the downloaded Dashboard data.";
+                // only show the button if setting pagedata didn't cause the exception
+                if (pagedata != null) {
+                    showButton = true;
+                }
+                ex = e;
+                e.printStackTrace();
+                cancel(true);
+                return null;
+            }
             return feedList;
         }
 
         @Override
         protected void onPostExecute(List<MyPair<String, List<FeedItem>>> result) {
-            // dlv.setAdapter(new BlackboardDashboardAdapter(result));
             feedList.addAll(tempFeedList);
             bda.notifyDataSetChanged();
-            // tl.addSplit("Adapter created");
             d_pb_ll.setVisibility(View.GONE);
             dlv.setVisibility(View.VISIBLE);
             ell.setVisibility(View.GONE);
@@ -357,7 +245,7 @@ public class BlackboardDashboardFragment extends SherlockFragment {
 
                     @Override
                     public void onClick(View v) {
-                        if (pagedata != null && ex != null) {
+                        if (ex != null) {
                             SharedPreferences sp = PreferenceManager
                                     .getDefaultSharedPreferences(getActivity().getBaseContext());
                             if (!sp.getBoolean("acra.enable", true)) {
@@ -389,7 +277,6 @@ public class BlackboardDashboardFragment extends SherlockFragment {
         }
     }
 
-    // TODO: figure out fast scroll, maybe the min-sdk is just too low...
     class BlackboardDashboardAdapter extends AmazingAdapter {
 
         private List<MyPair<String, List<FeedItem>>> items;
@@ -401,26 +288,26 @@ public class BlackboardDashboardFragment extends SherlockFragment {
         @Override
         public int getCount() {
             int res = 0;
-            for (int i = 0; i < items.size(); i++) {
-                res += items.get(i).second.size();
+            for (MyPair<String, List<FeedItem>> pair : items) {
+                res += pair.second.size();
             }
             return res;
         }
 
         @Override
         public boolean isEnabled(int position) {
-            return !("Unknown".equals(getItem(position).getType()) || "Notification"
-                    .equals(getItem(position).getType()));
+            return !("Unknown".equals(getItem(position).getType()) ||
+                    "Notification".equals(getItem(position).getType()));
         }
 
         @Override
         public FeedItem getItem(int position) {
             int c = 0;
-            for (int i = 0; i < items.size(); i++) {
-                if (position >= c && position < c + items.get(i).second.size()) {
-                    return items.get(i).second.get(position - c);
+            for (MyPair<String, List<FeedItem>> pair : items) {
+                if (position >= c && position < c + pair.second.size()) {
+                    return pair.second.get(position - c);
                 }
-                c += items.get(i).second.size();
+                c += pair.second.size();
             }
             return null;
         }
@@ -445,7 +332,6 @@ public class BlackboardDashboardFragment extends SherlockFragment {
             }
         }
 
-        // TODO
         @Override
         public View getAmazingView(int position, View convertView, ViewGroup parent) {
             View res = convertView;

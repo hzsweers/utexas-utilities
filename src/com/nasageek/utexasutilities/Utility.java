@@ -7,10 +7,9 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.widget.Toast;
 
-import org.apache.http.HttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.util.EntityUtils;
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -26,15 +25,6 @@ public class Utility {
 
     private static String sID = null;
     private static final String INSTALLATION = "UUID";
-
-    @TargetApi(Build.VERSION_CODES.GINGERBREAD)
-    public static void commit(SharedPreferences.Editor editor) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.GINGERBREAD) {
-            editor.apply();
-        } else {
-            editor.commit();
-        }
-    }
 
     public static String id(Context context) {
         if (sID == null) {
@@ -88,33 +78,38 @@ public class Utility {
         protected Void doInBackground(Void... v) {
 
             // 675, 684, 685 were retired on 1/7/14
+            // 651, 652 retired in 8/14
             int[] routes = {
-                    640, 641, 642, 651, 652, 653, 656, 661, 663, 670, 671, 672, 680, 681
+                    640, 641, 642, 653, 656, 661, 663, 670, 671, 672, 680, 681
             };
 
             // FileOutputStream fos = con.openFileOutput("stops",
             // Context.MODE_PRIVATE);
             File folder = con.getDir("stops", Context.MODE_PRIVATE);
 
-            DefaultHttpClient client = ConnectionHelper.getThreadSafeClient();
+            OkHttpClient client = new OkHttpClient();
             for (int route : routes) {
                 // BufferedOutputStream bos = new
                 // BufferedOutputStream(con.openFileOutput(route+"_stops.txt",
                 // Context.MODE_PRIVATE));
 
-                HttpGet hget = new HttpGet("http://www.capmetro.org/schedulemap-ut.aspx?f1="
-                        + route + "&map=stops");
+                String reqUrl = "http://www.capmetro.org/schedulemap-ut.aspx?f1="
+                        + route + "&map=stops";
+                Request request = new Request.Builder()
+                        .url(reqUrl)
+                        .build();
                 String pagedata = "";
 
                 try {
-                    HttpResponse response = client.execute(hget);
-                    pagedata = EntityUtils.toString(response.getEntity());
-                } catch (Exception e) {
+                    Response response = client.newCall(request).execute();
+                    pagedata = response.body().string();
+                } catch (IOException e) {
                     errorText = "Connection to CapMetro failed.";
-                    cancel(true);
                     e.printStackTrace();
+                    cancel(true);
                     return null;
                 }
+
                 File stopsfile = new File(folder, route + "_stops.txt");
                 BufferedOutputStream bos = null;
 
@@ -197,5 +192,10 @@ public class Utility {
      */
     public static String makeFragmentName(int viewId, int position) {
         return "android:switcher:" + viewId + ":" + position;
+    }
+
+    public static <P> void parallelExecute(AsyncTask<P, ?, ?> task, P... params) {
+        // always call executeOnExecutor because I pulled in a current AsyncTask
+        task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, params);
     }
 }
